@@ -8,7 +8,7 @@ import (
 
 type client struct{} // 必要に応じて、このタイプにデータを追加します。
 
-var clients = make(map[*websocket.Conn]client)
+var clients = make(map[*websocket.Conn]client) // 注：キーとしてポインターのようなタイプ（文字列など）を持つ大きなマップは低速ですが、キーとしてポインター自体を使用することは許容され、高速です
 var register = make(chan *websocket.Conn)
 var broadcast = make(chan string)
 var unregister = make(chan *websocket.Conn)
@@ -23,7 +23,7 @@ func runHub()  {
 		case message := <-broadcast:
 			log.Println("message received:", message)
 
-			// Send the message to all client
+			// すべてのクライアントにメッセージを送信します
 			for connection := range clients {
 				if err := connection.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
 					log.Println("write error: ", err)
@@ -34,7 +34,9 @@ func runHub()  {
 				}
 			}
 		case connection := <-unregister:
+			// ハブからクライアントを削除します
 			delete(clients, connection)
+
 			log.Println("connection unregistered")
 		}
 	}
@@ -55,13 +57,13 @@ func main()  {
 	go runHub()
 
 	app.Get("/ws", websocket.New(func(c *websocket.Conn) {
-		// When the function returns, unregister the client and close the connection
+		// 関数が戻ったら、クライアントの登録を解除して接続を閉じます
 		defer func() {
 			unregister <- c
 			c.Close()
 		}()
 
-		// Register the client
+		// クライアントを登録する
 		register <- c
 
 		for {
@@ -70,11 +72,11 @@ func main()  {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					log.Println("read error: ", err)
 				}
-				return // Calls the deferred function, i.e. closes the connection on error
+				return // 遅延関数を呼び出します。つまり、エラー時に接続を閉じます。
 			}
 
 			if messageType == websocket.TextMessage {
-				// Broadcast the received message
+				// 受信したメッセージをブロードキャストする
 				broadcast <- string(message)
 			} else {
 				log.Println("websocket message received of type", messageType)
