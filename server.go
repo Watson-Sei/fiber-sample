@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/template/html"
 	"github.com/gofiber/websocket/v2"
 	"log"
 )
@@ -71,16 +72,26 @@ func (h *hub) run() {
 func main()  {
 	go h.run()
 
-	app := fiber.New()
+	engine := html.New("./templates", ".html")
 
-	app.Use(func(c *fiber.Ctx) error {
+	app := fiber.New(fiber.Config{
+		Views: engine,
+	})
+
+	app.Get("/:id", func(c *fiber.Ctx) error {
+		return c.Render("index", nil)
+	})
+
+	socketapp := app.Group("/ws")
+
+	socketapp.Use(func(c *fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {
 			return c.Next()
 		}
 		return c.SendStatus(fiber.StatusUpgradeRequired)
 	})
 
-	app.Get("/ws/:roomId", websocket.New(func(c *websocket.Conn) {
+	socketapp.Get("/:roomId", websocket.New(func(c *websocket.Conn) {
 		roomId := c.Params("roomId")
 
 		s := subscription{c, roomId}
