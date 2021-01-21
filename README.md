@@ -4,3 +4,12 @@
 ----|---- 
 | fiber websocket chat sample | [github](https://github.com/gofiber/recipes/tree/master/websocket-chat) |
 | fiber websocket library | [github](https://github.com/gofiber/websocket) |
+
+## How to use Rest Server & WebSocket Server
+```shell script
+# terminal 1
+go run rest_server.go
+
+# terminal 2
+go run server.go
+```
