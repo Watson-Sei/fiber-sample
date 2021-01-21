@@ -6,46 +6,72 @@ import (
 	"log"
 )
 
-type client struct{} // 必要に応じて、このタイプにデータを追加します。
+type message struct {
+	data []byte
+	room string
+}
 
-var clients = make(map[*websocket.Conn]client) // 注：キーとしてポインターのようなタイプ（文字列など）を持つ大きなマップは低速ですが、キーとしてポインター自体を使用することは許容され、高速です
-var register = make(chan *websocket.Conn)
-var broadcast = make(chan string)
-var unregister = make(chan *websocket.Conn)
+type subscription struct {
+	conn *websocket.Conn
+	room string
+}
 
-func runHub()  {
+type hub struct {
+	rooms map[string]map[*websocket.Conn]bool
+	broadcast chan message
+	register chan subscription
+	unregister chan subscription
+}
+
+var h = hub {
+	broadcast: make(chan message),
+	register: make(chan subscription),
+	unregister: make(chan subscription),
+	rooms: make(map[string]map[*websocket.Conn]bool),
+}
+
+func (h *hub) run() {
 	for {
 		select {
-		case connection := <-register:
-			clients[connection] = client{}
+		case s := <-h.register:
+			connections := h.rooms[s.room]
+			if connections == nil {
+				connections = make(map[*websocket.Conn]bool)
+				h.rooms[s.room] = connections
+			}
+			h.rooms[s.room][s.conn] = true
 			log.Println("connection registered")
-
-		case message := <-broadcast:
-			log.Println("message received:", message)
-
-			// すべてのクライアントにメッセージを送信します
-			for connection := range clients {
-				if err := connection.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
-					log.Println("write error: ", err)
-
-					unregister <- connection
-					connection.WriteMessage(websocket.CloseMessage, []byte{})
-					connection.Close()
+		case s := <-h.unregister:
+			connections := h.rooms[s.room]
+			if connections != nil {
+				if _, ok := connections[s.conn]; ok {
+					delete(connections, s.conn)
+					log.Println("connection unregistered")
 				}
 			}
-		case connection := <-unregister:
-			// ハブからクライアントを削除します
-			delete(clients, connection)
+		case m := <-h.broadcast:
+			log.Println("message received:", m)
+			connections := h.rooms[m.room]
 
-			log.Println("connection unregistered")
+			// すべてのクライアントにメッセージを送信します
+			for connection := range connections {
+				if err := connection.WriteMessage(websocket.TextMessage, []byte(m.data)); err != nil {
+					log.Println("write error:", err)
+
+					delete(connections, connection)
+					if len(connections) == 0 {
+						delete(h.rooms, m.room)
+					}
+				}
+			}
 		}
 	}
 }
 
 func main()  {
-	app := fiber.New()
+	go h.run()
 
-	app.Static("/", "./templates/index.html")
+	app := fiber.New()
 
 	app.Use(func(c *fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {
@@ -54,30 +80,32 @@ func main()  {
 		return c.SendStatus(fiber.StatusUpgradeRequired)
 	})
 
-	go runHub()
+	app.Get("/ws/:roomId", websocket.New(func(c *websocket.Conn) {
+		roomId := c.Params("roomId")
 
-	app.Get("/ws", websocket.New(func(c *websocket.Conn) {
-		// 関数が戻ったら、クライアントの登録を解除して接続を閉じます
+		s := subscription{c, roomId}
+
 		defer func() {
-			unregister <- c
-			c.Close()
+			h.unregister <- s
+			s.conn.Close()
 		}()
 
-		// クライアントを登録する
-		register <- c
+		// クライアントを登録
+		h.register <- s
 
 		for {
-			messageType, message, err := c.ReadMessage()
+			messageType, msg, err := c.ReadMessage()
 			if err != nil {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					log.Println("read error: ", err)
 				}
-				return // 遅延関数を呼び出します。つまり、エラー時に接続を閉じます。
+				return // 遅延関数を呼び出します。つまり、エラー時に接続を閉じます
 			}
 
 			if messageType == websocket.TextMessage {
 				// 受信したメッセージをブロードキャストする
-				broadcast <- string(message)
+				m := message{msg, s.room}
+				h.broadcast <- m
 			} else {
 				log.Println("websocket message received of type", messageType)
 			}
